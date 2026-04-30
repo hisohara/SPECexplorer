@@ -18,7 +18,7 @@ A web application for exploring and analyzing SPEC CPU 2017 benchmark results. B
 ## Installation
 
 ```bash
-git clone git@github.com:hisohara/SPECexplorer.git
+git clone https://github.com/hisohara/SPECexplorer.git
 cd SPECexplorer
 python3 -m venv .venv
 source .venv/bin/activate
