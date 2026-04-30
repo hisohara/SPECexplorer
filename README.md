@@ -43,3 +43,12 @@ The app will be available at http://localhost:8000.
 3. Use the upload form to import INT and/or FP result CSV files.
 
 SKU data is loaded automatically from `SKU.csv` on first startup.
+
+### SKU data
+
+The bundled `SKU.csv` includes the following CPU generations:
+
+- AMD EPYC — Genoa, Turin
+- Intel Xeon — Granite Rapids
+
+You can add your own SKUs by editing `SKU.csv`. After modifying the file, delete `specexplorer.db` and restart the server to recreate the database.
