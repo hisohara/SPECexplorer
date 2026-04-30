@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if message %}
+<div class="message">{{ message }}</div>
+{% endif %}
+
+<!-- Upload Section -->
+<div class="card">
+    <h2>CSV Upload</h2>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+        <div class="upload-row">
+            <div>
+                <label>SPEC CPU 2017 Floating Point Rate (CFP2017rate)</label>
+                <input type="file" name="fp_file" accept=".csv">
+            </div>
+            <div>
+                <label>SPEC CPU 2017 Integer Rate (CINT2017rate)</label>
+                <input type="file" name="int_file" accept=".csv">
+            </div>
+        </div>
+        <div style="margin-top: 15px; display: flex; gap: 10px;">
+            <button type="submit">Import</button>
+            <span style="color: #666; font-size: 0.85rem; align-self: center;">{{ result_count }} records in DB</span>
+        </div>
+    </form>
+    {% if result_count > 0 %}
+    <form action="/clear" method="post" style="margin-top: 10px;">
+        <button type="submit" class="btn-secondary" onclick="return confirm('Delete all data?')">Clear Data</button>
+    </form>
+    {% endif %}
+</div>
+
+{% if result_count > 0 %}
+<!-- Filter Section -->
+<div class="card">
+    <h2>Filters</h2>
+    <form hx-post="/filter" hx-target="#results-area" hx-indicator="#filter-spinner">
+        <div class="filters">
+            <div class="filter-group">
+                <label>Benchmark Type</label>
+                <select name="benchmark_type">
+                    <option value="">-- Select --</option>
+                    {% for bt in filter_opts.benchmark_types %}
+                    <option value="{{ bt }}">SPEC {{ bt }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>CPU Sockets</label>
+                <div class="checkbox-group">
+                    {% for c in filter_opts.chips %}
+                    <label><input type="checkbox" name="chips" value="{{ c }}"> {{ c }}S</label>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="filter-group">
+                <label>AMD SKU <a href="#" class="sku-spec-link" onclick="event.preventDefault(); openSpecModal('amd-spec-modal');">Specs</a></label>
+                <div class="checkbox-group">
+                    {% set ns = namespace(current_gen='') %}
+                    {% for s in filter_opts.amd_skus %}
+                    {% if s.generation != ns.current_gen %}
+                        {% set ns.current_gen = s.generation %}
+                        <div class="gen-header">{{ s.generation }}</div>
+                    {% endif %}
+                    <label><input type="checkbox" name="sku_model" value="{{ s.model }}"> {{ s.model }} ({{ s.cores }} cores)</label>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="filter-group">
+                <label>Intel SKU <a href="#" class="sku-spec-link" onclick="event.preventDefault(); openSpecModal('intel-spec-modal');">Specs</a></label>
+                <div class="checkbox-group">
+                    {% set ns2 = namespace(current_gen='') %}
+                    {% for s in filter_opts.intel_skus %}
+                    {% set display_gen = 'Granite Rapids' if s.generation == 'Granite Rapids-D' else s.generation %}
+                    {% if display_gen != ns2.current_gen %}
+                        {% set ns2.current_gen = display_gen %}
+                        <div class="gen-header">{{ display_gen }}</div>
+                    {% endif %}
+                    <label><input type="checkbox" name="sku_model" value="{{ s.model }}"> {{ s.model }} ({{ s.cores }} cores)</label>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        <div class="filter-actions">
+            <button type="submit">Search</button>
+            <button type="button" class="btn-secondary" onclick="this.closest('form').reset(); document.getElementById('results-area').innerHTML='<p class=\'result-count\'>Select filters and click Search</p>';">Clear</button>
+            <span id="filter-spinner" class="htmx-indicator spinner">Searching...</span>
+        </div>
+    </form>
+</div>
+
+<!-- Results Section -->
+<div class="card">
+    <h2>Results</h2>
+    <div id="results-area">
+        <p class="result-count">Select filters and click Search</p>
+    </div>
+</div>
+<!-- AMD Spec Modal -->
+<div class="modal-overlay" id="amd-spec-modal" onclick="if(event.target===this) closeSpecModal('amd-spec-modal');">
+    <div class="spec-modal-box">
+        <h3>AMD SKU Specifications <button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.75rem;" onclick="closeSpecModal('amd-spec-modal');">Close</button></h3>
+        <h4 style="margin:12px 0 6px; font-size:0.9rem; color:#c0392b;">Turin</h4>
+        <table class="spec-table" id="turin-spec-table">
+            <thead><tr>
+                <th style="cursor:default;"></th>
+                <th data-col="0" data-type="str">Model</th>
+                <th data-col="1" data-type="num">Cores</th>
+                <th data-col="2" data-type="num">Threads</th>
+                <th data-col="3" data-type="num">Base Clock</th>
+                <th data-col="4" data-type="num">Fmax</th>
+                <th data-col="5" data-type="num">All-core Boost</th>
+                <th data-col="6" data-type="num">TDP</th>
+                <th data-col="7" data-type="num">L3 Cache</th>
+                <th data-col="8" data-type="num">DDR5</th>
+                <th data-col="9" data-type="num">Channel</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+        <div style="margin-top:6px; text-align:right;">
+            <button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.75rem;" onclick="renderSpecTable('turin-spec-table', turinSpecData, amdSpecKeys);">Reset</button>
+        </div>
+        <h4 style="margin:18px 0 6px; font-size:0.9rem; color:#c0392b;">Genoa</h4>
+        <table class="spec-table" id="genoa-spec-table">
+            <thead><tr>
+                <th style="cursor:default;"></th>
+                <th data-col="0" data-type="str">Model</th>
+                <th data-col="1" data-type="num">Cores</th>
+                <th data-col="2" data-type="num">Threads</th>
+                <th data-col="3" data-type="num">Base Clock</th>
+                <th data-col="4" data-type="num">Fmax</th>
+                <th data-col="5" data-type="num">All-core Boost</th>
+                <th data-col="6" data-type="num">TDP</th>
+                <th data-col="7" data-type="num">L3 Cache</th>
+                <th data-col="8" data-type="num">DDR5</th>
+                <th data-col="9" data-type="num">Channel</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+        <div style="margin-top:6px; text-align:right;">
+            <button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.75rem;" onclick="renderSpecTable('genoa-spec-table', genoaSpecData, amdSpecKeys);">Reset</button>
+        </div>
+    </div>
+</div>
+
+<!-- Intel Spec Modal -->
+<div class="modal-overlay" id="intel-spec-modal" onclick="if(event.target===this) closeSpecModal('intel-spec-modal');">
+    <div class="spec-modal-box">
+        <h3>Intel SKU Specifications <button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.75rem;" onclick="closeSpecModal('intel-spec-modal');">Close</button></h3>
+        <table class="spec-table" id="intel-spec-table">
+            <thead><tr>
+                <th style="cursor:default;"></th>
+                <th data-col="0" data-type="str">Generation</th>
+                <th data-col="1" data-type="str">Model</th>
+                <th data-col="2" data-type="num">Cores</th>
+                <th data-col="3" data-type="num">Threads</th>
+                <th data-col="4" data-type="num">Base Clock</th>
+                <th data-col="5" data-type="num">Fmax</th>
+                <th data-col="6" data-type="num">All-core Boost</th>
+                <th data-col="7" data-type="num">TDP</th>
+                <th data-col="8" data-type="num">L3 Cache</th>
+                <th data-col="9" data-type="num">DDR5</th>
+                <th data-col="10" data-type="num">Channel</th>
+            </tr></thead>
+            <tbody></tbody>
+        </table>
+        <div style="margin-top:10px; text-align:right;">
+            <button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.75rem;" onclick="renderSpecTable('intel-spec-table', intelSpecData);">Reset</button>
+        </div>
+    </div>
+</div>
+
+<script>
+var amdSpecData = {{ filter_opts.amd_sku_specs | tojson }};
+var intelSpecData = {{ filter_opts.intel_sku_specs | tojson }};
+var turinSpecData = amdSpecData.filter(function(r) { return r.generation === 'Turin'; });
+var genoaSpecData = amdSpecData.filter(function(r) { return r.generation === 'Genoa'; });
+var intelSpecKeys = ['generation','model','cores','threads','base_clock','fmax','all_core_boost','tdp','l3_cache','ddr5','channel'];
+var amdSpecKeys = ['model','cores','threads','base_clock','fmax','all_core_boost','tdp','l3_cache','ddr5','channel'];
+
+function renderSpecTable(tableId, data, keys) {
+    keys = keys || intelSpecKeys;
+    var tbody = document.getElementById(tableId).querySelector('tbody');
+    // preserve checked state
+    var checked = {};
+    tbody.querySelectorAll('.spec-check:checked').forEach(function(cb) { checked[cb.value] = true; });
+    var html = '';
+    data.forEach(function(r) {
+        var model = r.model;
+        var isChecked = checked[model] ? ' checked' : '';
+        html += '<tr><td><input type="checkbox" class="spec-check" value="' + model + '"' + isChecked + '></td>';
+        keys.forEach(function(k) { html += '<td>' + (r[k] != null ? r[k] : '') + '</td>'; });
+        html += '</tr>';
+    });
+    tbody.innerHTML = html;
+    document.getElementById(tableId).querySelectorAll('th[data-col]').forEach(function(th) {
+        th.classList.remove('sort-asc','sort-desc');
+        delete th.dataset.dir;
+    });
+}
+
+function openSpecModal(modalId) {
+    var modal = document.getElementById(modalId);
+    // sync current filter checkboxes into spec checkboxes
+    var checked = {};
+    document.querySelectorAll('input[name="sku_model"]:checked').forEach(function(cb) {
+        checked[cb.value] = true;
+    });
+    modal.querySelectorAll('.spec-check').forEach(function(cb) {
+        cb.checked = !!checked[cb.value];
+    });
+    modal.classList.add('active');
+}
+
+function closeSpecModal(modalId) {
+    var modal = document.getElementById(modalId);
+    // collect checked models from all tables in this modal
+    var selected = [];
+    modal.querySelectorAll('.spec-check:checked').forEach(function(cb) {
+        selected.push(cb.value);
+    });
+    // sync to filter checkboxes
+    if (selected.length > 0) {
+        document.querySelectorAll('input[name="sku_model"]').forEach(function(cb) {
+            if (selected.indexOf(cb.value) >= 0) {
+                cb.checked = true;
+            }
+        });
+    }
+    modal.classList.remove('active');
+}
+
+function initSpecSort(tableId, data, keys) {
+    keys = keys || intelSpecKeys;
+    var table = document.getElementById(tableId);
+    var headers = table.querySelectorAll('th[data-col]');
+    headers.forEach(function(th) {
+        th.addEventListener('click', function() {
+            var col = parseInt(this.dataset.col);
+            var type = this.dataset.type;
+            var key = keys[col];
+            var dir = this.dataset.dir;
+            if (!dir) {
+                dir = 'asc';
+            } else if (dir === 'asc') {
+                dir = 'desc';
+            } else {
+                headers.forEach(function(h) { h.classList.remove('sort-asc','sort-desc'); delete h.dataset.dir; });
+                renderSpecTable(tableId, data, keys);
+                return;
+            }
+            headers.forEach(function(h) { h.classList.remove('sort-asc','sort-desc'); delete h.dataset.dir; });
+            this.dataset.dir = dir;
+            this.classList.add(dir === 'asc' ? 'sort-asc' : 'sort-desc');
+            var sorted = data.slice().sort(function(a, b) {
+                var va = a[key], vb = b[key];
+                if (type === 'num') {
+                    va = parseFloat(va) || 0; vb = parseFloat(vb) || 0;
+                    return dir === 'asc' ? va - vb : vb - va;
+                }
+                va = String(va); vb = String(vb);
+                return dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+            });
+            renderSpecTable(tableId, sorted, keys);
+            this.dataset.dir = dir;
+            this.classList.add(dir === 'asc' ? 'sort-asc' : 'sort-desc');
+        });
+    });
+}
+
+renderSpecTable('turin-spec-table', turinSpecData, amdSpecKeys);
+renderSpecTable('genoa-spec-table', genoaSpecData, amdSpecKeys);
+renderSpecTable('intel-spec-table', intelSpecData, intelSpecKeys);
+initSpecSort('turin-spec-table', turinSpecData, amdSpecKeys);
+initSpecSort('genoa-spec-table', genoaSpecData, amdSpecKeys);
+initSpecSort('intel-spec-table', intelSpecData, intelSpecKeys);
+</script>
+{% endif %}
+
+{% endblock %}

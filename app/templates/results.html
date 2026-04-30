@@ -1,0 +1,653 @@
+{% if selected_skus is defined and selected_skus %}
+<p class="selected-skus">Selected SKU: {{ selected_skus | join(', ') }}</p>
+{% endif %}
+{% if results %}
+{% if summary is defined and summary %}
+<h3 style="margin-top: 10px; margin-bottom: 10px; font-size: 1rem; color: #16213e;">Summary (Base)</h3>
+<table id="summary-table">
+    <thead>
+        <tr>
+            <th></th>
+            <th>Generation</th>
+            <th>SKU Model</th>
+            <th>Sockets</th>
+            <th>Total Cores</th>
+            <th>TDP</th>
+            <th>Count</th>
+            <th>Min Base</th>
+            <th>Max Base</th>
+            <th>Avg Base</th>
+            <th>Avg Base/TDP</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for s in summary %}
+        <tr data-sku-key="{{ s.sku_model }}_{{ s.chips }}">
+            <td>{% if s.count > 0 %}<button class="vis-btn on" data-sku-key="{{ s.sku_model }}_{{ s.chips }}" title="Toggle visibility">&#x25CF;</button>{% endif %}</td>
+            <td>{{ s.generation }}</td>
+            <td>{{ s.sku_model }}</td>
+            <td>{{ s.chips }}S</td>
+            <td>{{ s.cores }}</td>
+            <td>{{ s.tdp }}</td>
+            <td>{{ s.count }}</td>
+            <td>{% if s.min_base is none %}N/A{% elif s.min_url %}<a href="{{ s.min_url }}" target="_blank">{{ s.min_base }}</a>{% else %}{{ s.min_base }}{% endif %}</td>
+            <td style="font-weight: 600;">{% if s.max_base is none %}N/A{% elif s.max_url %}<a href="{{ s.max_url }}" target="_blank">{{ s.max_base }}</a>{% else %}{{ s.max_base }}{% endif %}</td>
+            <td>{% if s.avg_base is none %}N/A{% else %}{{ s.avg_base }}{% endif %}</td>
+            <td>{% if s.avg_base_per_tdp is none %}N/A{% else %}{{ s.avg_base_per_tdp }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{% if summary is defined and summary|length > 0 %}
+<div style="margin-top: 20px; margin-bottom: 20px;">
+    <div style="display: flex; align-items: center; gap: 16px;">
+        <div class="toggle-switch" style="margin-bottom: 0;">
+            <input type="checkbox" id="max-base-toggle">
+            <label for="max-base-toggle"><span class="toggle-slider"></span> Max Base</label>
+        </div>
+        <div class="toggle-switch" style="margin-bottom: 0;">
+            <input type="checkbox" id="base-tdp-toggle">
+            <label for="base-tdp-toggle"><span class="toggle-slider"></span> Max Base/TDP</label>
+        </div>
+        <div class="toggle-switch" style="margin-bottom: 0;">
+            <input type="checkbox" id="base-core-toggle">
+            <label for="base-core-toggle"><span class="toggle-slider"></span> Max Base/core</label>
+        </div>
+        <button type="button" id="export-chart-btn" class="btn-secondary" style="padding: 5px 12px; font-size: 0.8rem;">Export PNG</button>
+        <button type="button" id="tco-open-btn" style="padding: 5px 12px; font-size: 0.8rem;">TCO Analysis</button>
+    </div>
+    <div style="position: relative; height: 420px;">
+        <canvas id="summary-chart"></canvas>
+    </div>
+</div>
+<script>
+(function() {
+    var summaryData = {{ summary | tojson }};
+    var canvas = document.getElementById('summary-chart');
+    var toggle = document.getElementById('base-tdp-toggle');
+    if (!canvas || !summaryData.length) return;
+
+    if (canvas._chartInstance) { canvas._chartInstance.destroy(); }
+
+    // Color palettes: AMD = red, Intel = blue
+    var amdPalette = [
+        {bg: 'rgba(255,99,132,0.85)',  border: 'rgb(255,99,132)'},
+        {bg: 'rgba(220,60,90,0.85)',   border: 'rgb(220,60,90)'},
+        {bg: 'rgba(255,140,160,0.85)', border: 'rgb(255,140,160)'},
+        {bg: 'rgba(200,40,70,0.85)',   border: 'rgb(200,40,70)'},
+        {bg: 'rgba(255,170,185,0.85)', border: 'rgb(255,170,185)'},
+        {bg: 'rgba(180,30,60,0.85)',   border: 'rgb(180,30,60)'},
+        {bg: 'rgba(240,80,110,0.85)',  border: 'rgb(240,80,110)'},
+        {bg: 'rgba(255,120,145,0.85)', border: 'rgb(255,120,145)'}
+    ];
+    var intelPalette = [
+        {bg: 'rgba(54,162,235,0.85)',  border: 'rgb(54,162,235)'},
+        {bg: 'rgba(30,120,200,0.85)',  border: 'rgb(30,120,200)'},
+        {bg: 'rgba(80,190,255,0.85)',  border: 'rgb(80,190,255)'},
+        {bg: 'rgba(20,90,170,0.85)',   border: 'rgb(20,90,170)'},
+        {bg: 'rgba(100,200,240,0.85)', border: 'rgb(100,200,240)'},
+        {bg: 'rgba(0,70,140,0.85)',    border: 'rgb(0,70,140)'},
+        {bg: 'rgba(60,140,220,0.85)',  border: 'rgb(60,140,220)'},
+        {bg: 'rgba(110,180,250,0.85)', border: 'rgb(110,180,250)'}
+    ];
+    var palettes = {
+        'Genoa': amdPalette,
+        'Turin': amdPalette,
+        'Granite Rapids': intelPalette,
+        'Granite Rapids-D': intelPalette,
+        'Sierra Forest': intelPalette
+    };
+    var defaultPalette = [
+        {bg: 'rgba(75,192,192,0.85)', border: 'rgb(75,192,192)'}
+    ];
+
+    var hiddenSkus = window._hiddenSkus = {};
+    var showBaseTdp = false;
+    var showMaxBase = false;
+    var showBaseCore = false;
+    var maxBaseToggle = document.getElementById('max-base-toggle');
+    var baseCoreToggle = document.getElementById('base-core-toggle');
+
+    function r2(v) { return Math.round(v * 100) / 100; }
+
+    function getColor(gen, idx) {
+        var p = palettes[gen] || defaultPalette;
+        return p[idx % p.length];
+    }
+
+    function buildDatasets() {
+        var datasets = [];
+        // Count per generation to assign color index
+        var genIdx = {};
+        summaryData.forEach(function(s) {
+            if (s.count === 0) return;
+            var gen = s.generation;
+            if (genIdx[gen] == null) genIdx[gen] = 0;
+            var ci = genIdx[gen]++;
+            var c = getColor(gen, ci);
+            var tdp = s.tdp || 1;
+            var skuKey = s.sku_model + '_' + s.chips;
+            var hidden = !!hiddenSkus[skuKey];
+            var yVal, yMin, yMax;
+            if (showMaxBase) {
+                yVal = r2(s.max_base);
+                yMin = null;
+                yMax = null;
+            } else if (showBaseTdp) {
+                yVal = r2(s.max_base / tdp);
+                yMin = null;
+                yMax = null;
+            } else if (showBaseCore) {
+                yVal = r2(s.max_base / s.cores);
+                yMin = null;
+                yMax = null;
+            } else {
+                yVal = r2(s.avg_base);
+                yMin = r2(s.min_base);
+                yMax = r2(s.max_base);
+            }
+            var data = [{
+                x: s.cores, y: yVal, min: yMin, max: yMax,
+                sku: s.sku_model, count: s.count
+            }];
+            datasets.push({
+                label: gen + ':' + s.sku_model + '(' + s.chips + 'S)',
+                type: 'scatter',
+                data: data,
+                backgroundColor: c.bg,
+                borderColor: c.border,
+                borderWidth: 2,
+                pointRadius: 6,
+                pointHoverRadius: 9,
+                hidden: hidden,
+                _errorBars: !(showMaxBase || showBaseTdp || showBaseCore),
+                _sku: skuKey
+            });
+        });
+        return datasets;
+    }
+
+    var errorBarPlugin = {
+        id: 'errorBars',
+        afterDatasetsDraw: function(chart) {
+            var ctx = chart.ctx;
+            chart.data.datasets.forEach(function(dataset, i) {
+                if (!dataset._errorBars) return;
+                var meta = chart.getDatasetMeta(i);
+                if (meta.hidden || dataset.hidden) return;
+                meta.data.forEach(function(point, j) {
+                    var raw = dataset.data[j];
+                    if (!raw || raw.min == null || raw.max == null) return;
+                    var xPx = point.x;
+                    var yMinPx = chart.scales.y.getPixelForValue(raw.min);
+                    var yMaxPx = chart.scales.y.getPixelForValue(raw.max);
+                    var capW = 10;
+                    ctx.save();
+                    ctx.strokeStyle = dataset.borderColor;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(xPx, yMinPx);
+                    ctx.lineTo(xPx, yMaxPx);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(xPx - capW, yMinPx);
+                    ctx.lineTo(xPx + capW, yMinPx);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(xPx - capW, yMaxPx);
+                    ctx.lineTo(xPx + capW, yMaxPx);
+                    ctx.stroke();
+                    ctx.restore();
+                });
+            });
+        }
+    };
+
+    function syncTableButtons() {
+        document.querySelectorAll('#summary-table .vis-btn').forEach(function(btn) {
+            var key = btn.dataset.skuKey;
+            if (hiddenSkus[key]) {
+                btn.classList.remove('on');
+                btn.classList.add('off');
+                btn.innerHTML = '&#x25CB;';
+            } else {
+                btn.classList.remove('off');
+                btn.classList.add('on');
+                btn.innerHTML = '&#x25CF;';
+            }
+        });
+    }
+
+    function toggleSku(sku) {
+        hiddenSkus[sku] = !hiddenSkus[sku];
+        syncTableButtons();
+        refreshChart();
+    }
+
+    function calcRanges(datasets) {
+        var yMin = Infinity, yMax = -Infinity, xMin = Infinity, xMax = -Infinity;
+        datasets.forEach(function(ds) {
+            if (ds.hidden) return;
+            ds.data.forEach(function(d) {
+                if (d.min != null && d.min < yMin) yMin = d.min;
+                if (d.max != null && d.max > yMax) yMax = d.max;
+                if (d.y < yMin) yMin = d.y;
+                if (d.y > yMax) yMax = d.y;
+                if (d.x < xMin) xMin = d.x;
+                if (d.x > xMax) xMax = d.x;
+            });
+        });
+        var yPad = yMin === Infinity ? 0 : ((yMax - yMin) * 0.05 || 10);
+        var xSpan = xMax - xMin;
+        var xPad = xMin === Infinity ? 0 : (xSpan > 0 ? xSpan * 0.15 : xMin * 0.2);
+        return {
+            yMin: yMin === Infinity ? undefined : Math.floor(yMin - yPad),
+            yMax: yMax === -Infinity ? undefined : Math.ceil(yMax + yPad),
+            xMin: xMin === Infinity ? undefined : Math.floor(xMin - xPad),
+            xMax: xMax === -Infinity ? undefined : Math.ceil(xMax + xPad)
+        };
+    }
+
+    function refreshChart() {
+        var ds = buildDatasets();
+        chart.data.datasets = ds;
+        ds.forEach(function(d, i) {
+            chart.getDatasetMeta(i).hidden = d.hidden || null;
+        });
+        var r = calcRanges(ds);
+        chart.options.scales.y.min = r.yMin;
+        chart.options.scales.y.max = r.yMax;
+        chart.options.scales.x.min = r.xMin;
+        chart.options.scales.x.max = r.xMax;
+        var yLabel = showMaxBase ? 'Max Base' : showBaseTdp ? 'Max Base / TDP' : showBaseCore ? 'Max Base / core' : 'Base';
+        var title = showMaxBase ? 'Max Base vs Total Cores' : showBaseTdp ? 'Max Base/TDP vs Total Cores' : showBaseCore ? 'Max Base/core vs Total Cores' : 'Base Score vs Total Cores';
+        chart.options.scales.y.title.text = yLabel;
+        chart.options.plugins.title.text = title;
+        chart.update();
+    }
+
+    var initDs = buildDatasets();
+    var initRange = calcRanges(initDs);
+    var chart = new Chart(canvas, {
+        type: 'scatter',
+        data: { datasets: initDs },
+        plugins: [errorBarPlugin],
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            onClick: function(e, elements) {
+                if (!elements.length) return;
+                var el = elements[0];
+                var ds = chart.data.datasets[el.datasetIndex];
+                if (ds && ds._sku) { toggleSku(ds._sku); }
+            },
+            plugins: {
+                title: { display: true, text: 'Base Score vs Total Cores', font: { size: 14 } },
+                legend: {
+                    display: true,
+                    position: 'right',
+                    labels: {
+                        padding: 12,
+                        usePointStyle: true,
+                        pointStyle: 'circle',
+                        generateLabels: function(chart) {
+                            return chart.data.datasets.map(function(ds, i) {
+                                var hidden = ds.hidden;
+                                return {
+                                    text: ds.label,
+                                    fillStyle: hidden ? 'rgba(200,200,200,0.4)' : ds.backgroundColor,
+                                    strokeStyle: hidden ? 'rgba(180,180,180,0.5)' : ds.borderColor,
+                                    lineWidth: ds.borderWidth,
+                                    hidden: false,
+                                    fontColor: hidden ? '#bbb' : '#666',
+                                    textDecoration: hidden ? 'line-through' : '',
+                                    datasetIndex: i
+                                };
+                            });
+                        }
+                    },
+                    onClick: function(e, legendItem) {
+                        var ds = chart.data.datasets[legendItem.datasetIndex];
+                        if (ds && ds._sku) { toggleSku(ds._sku); }
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            var p = ctx.raw;
+                            return p.sku + ' (' + p.x + ' cores) \u2014 Avg: ' + p.y + ', Min: ' + p.min + ', Max: ' + p.max + ' [n=' + p.count + ']';
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { title: { display: true, text: 'Total Cores' }, type: 'linear', min: initRange.xMin, max: initRange.xMax },
+                y: { title: { display: true, text: 'Base' }, min: initRange.yMin, max: initRange.yMax }
+            }
+        }
+    });
+    canvas._chartInstance = chart;
+
+    function disableToggle(el, off) {
+        el.disabled = off;
+        el.parentElement.querySelector('label').style.opacity = off ? '0.4' : '1';
+        if (off) el.checked = false;
+    }
+
+    function syncToggles(active) {
+        var others = [
+            { el: maxBaseToggle, state: 'showMaxBase' },
+            { el: toggle, state: 'showBaseTdp' },
+            { el: baseCoreToggle, state: 'showBaseCore' }
+        ];
+        others.forEach(function(o) {
+            if (o.el !== active) {
+                disableToggle(o.el, active.checked);
+            }
+        });
+        showMaxBase = maxBaseToggle.checked;
+        showBaseTdp = toggle.checked;
+        showBaseCore = baseCoreToggle.checked;
+        refreshChart();
+    }
+
+    maxBaseToggle.addEventListener('change', function() { syncToggles(this); });
+    toggle.addEventListener('change', function() { syncToggles(this); });
+    baseCoreToggle.addEventListener('change', function() { syncToggles(this); });
+
+    document.getElementById('export-chart-btn').addEventListener('click', async function() {
+        canvas.toBlob(async function(blob) {
+            if (window.showSaveFilePicker) {
+                try {
+                    var handle = await window.showSaveFilePicker({
+                        suggestedName: 'spec_summary_chart.png',
+                        types: [{
+                            description: 'PNG Image',
+                            accept: {'image/png': ['.png']}
+                        }]
+                    });
+                    var writable = await handle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+                } catch (e) {
+                    if (e.name !== 'AbortError') console.error(e);
+                }
+            } else {
+                var link = document.createElement('a');
+                link.download = 'spec_summary_chart.png';
+                link.href = URL.createObjectURL(blob);
+                link.click();
+                URL.revokeObjectURL(link.href);
+            }
+        }, 'image/png');
+    });
+
+    // Table visibility toggles
+    document.querySelectorAll('#summary-table .vis-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            toggleSku(this.dataset.skuKey);
+        });
+    });
+})();
+</script>
+<!-- TCO Modal -->
+<div class="modal-overlay" id="tco-modal">
+    <div class="modal-box">
+        <h3>TCO Analysis Parameters</h3>
+        <div class="modal-field"><label>Memory Size per VM (GiB)</label><input type="number" id="tco-mem-per-vm" value="8" min="1"></div>
+        <div class="modal-field"><label>Number of vCPU per VM</label><input type="number" id="tco-vcpu-per-vm" value="2" min="1"></div>
+        <div class="modal-field"><label>Number of Total VM</label><input type="number" id="tco-total-vm" value="5000" min="1"></div>
+        <div class="modal-field"><label>Cost of 32 GiB DIMM (USD thousands)</label><input type="number" id="tco-cost-32" value="2.3" step="0.1" min="0"></div>
+        <div class="modal-field"><label>Cost of 64 GiB DIMM (USD thousands)</label><input type="number" id="tco-cost-64" value="7.2" step="0.1" min="0"></div>
+        <div class="modal-field"><label>License fee per core (USD)</label><input type="number" id="tco-lic-core" value="400" step="1" min="0"></div>
+        <div class="modal-field"><label>License fee per node (USD)</label><input type="number" id="tco-lic-node" value="0" step="1" min="0"></div>
+        <div class="modal-field"><label>Node power excl. CPU (W)</label><input type="number" id="tco-node-power" value="500" min="0"></div>
+        <div class="modal-actions">
+            <button type="button" class="btn-secondary" id="tco-cancel-btn">Cancel</button>
+            <button type="button" id="tco-go-btn">Go</button>
+        </div>
+    </div>
+</div>
+<div id="tco-results" style="display: none; margin-top: 20px;">
+    <h3 style="margin-bottom: 8px; font-size: 1rem; color: #16213e;">TCO Analysis</h3>
+    <div id="tco-params" style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px 14px; background: #f8f8fa; border-radius: 6px; border-left: 3px solid #e94560; font-size: 0.82rem; color: #555;"></div>
+    <div style="overflow-x: auto;">
+    <table class="tco-table" id="tco-table"></table>
+    </div>
+</div>
+<script>
+(function() {
+    var summaryData = {{ summary | tojson }};
+    var modal = document.getElementById('tco-modal');
+    var openBtn = document.getElementById('tco-open-btn');
+    var cancelBtn = document.getElementById('tco-cancel-btn');
+    var goBtn = document.getElementById('tco-go-btn');
+    var tcoResults = document.getElementById('tco-results');
+    var tcoTable = document.getElementById('tco-table');
+    if (!openBtn) return;
+
+    var amdGens = ['Turin', 'Genoa'];
+    var skuState = [];
+    var tcoMemPerVm = 8, tcoVcpuPerVm = 2, tcoTotalVm = 5000;
+    var tcoCost32 = 2.3, tcoCost64 = 7.2, tcoLicCore = 400, tcoNodePower = 500;
+
+    openBtn.addEventListener('click', function() {
+        modal.classList.add('active');
+    });
+    cancelBtn.addEventListener('click', function() {
+        modal.classList.remove('active');
+    });
+    modal.addEventListener('click', function(e) {
+        if (e.target === modal) modal.classList.remove('active');
+    });
+
+    function recalcAll() {
+        skuState.forEach(function(st) {
+            st.nodeMem = st.channel * st.socket * st.dpc * st.dimm;
+            st.vmPerNode = Math.floor(st.nodeMem / tcoMemPerVm);
+            st.numNodes = st.vmPerNode > 0 ? Math.ceil(tcoTotalVm / st.vmPerNode) : 0;
+            st.totalDimms = st.socket * st.channel * st.dpc * st.numNodes;
+            st.cpuOvercommit = st.cores > 0 ? (st.vmPerNode * tcoVcpuPerVm / st.cores).toFixed(1) : '0.0';
+            st.totalPower = (st.socket * st.tdp + tcoNodePower) * st.numNodes;
+            var dimmCost = st.dimm === 32 ? tcoCost32 : tcoCost64;
+            st.systemCost = Math.round((st.totalDimms * dimmCost + st.cpuCost * st.socket * st.numNodes) * 100) / 100;
+            st.licenseCost = Math.round((st.cores * st.numNodes * tcoLicCore / 1000 * 5) * 100) / 100;
+            st.totalCost = Math.round((st.systemCost + st.licenseCost) * 100) / 100;
+        });
+        renderTable();
+    }
+
+    function renderTable() {
+        var rows = [
+            { label: 'SKU', render: function(st) { return '<td class="' + st.colorClass + '" style="font-weight:600;">' + st.sku + '</td>'; } },
+            { label: 'Socket', render: function(st) { return '<td>' + st.socket + 'S</td>'; } },
+            { label: 'Cores/node', render: function(st) { return '<td>' + st.cores + '</td>'; } },
+            { label: 'Channel/socket', render: function(st) { return '<td>' + st.channel + '</td>'; } },
+            { label: 'DIMM Size', render: function(st, i) {
+                return '<td><select class="tco-dimm" data-idx="' + i + '">' +
+                    '<option value="32"' + (st.dimm === 32 ? ' selected' : '') + '>32</option>' +
+                    '<option value="64"' + (st.dimm === 64 ? ' selected' : '') + '>64</option>' +
+                    '</select></td>';
+            }},
+            { label: 'DPC', render: function(st, i) {
+                return '<td><select class="tco-dpc" data-idx="' + i + '">' +
+                    '<option value="1"' + (st.dpc === 1 ? ' selected' : '') + '>1</option>' +
+                    '<option value="2"' + (st.dpc === 2 ? ' selected' : '') + '>2</option>' +
+                    '</select></td>';
+            }},
+            { label: 'Node Memory (GiB)', render: function(st) { return '<td>' + st.nodeMem.toLocaleString() + '</td>'; } },
+            { label: 'VM/node', render: function(st) { return '<td>' + st.vmPerNode.toLocaleString() + '</td>'; } },
+            { label: 'Number of Nodes', render: function(st) { return '<td>' + st.numNodes.toLocaleString() + '</td>'; } },
+            { label: 'Total DIMMs', render: function(st) { return '<td>' + st.totalDimms.toLocaleString() + '</td>'; } },
+            { label: 'CPU Overcommit Ratio', render: function(st) { return '<td>' + st.cpuOvercommit + '</td>'; } },
+            { label: 'SPEC INT per core', render: function(st) { return '<td>' + (st.cores > 0 ? (st.maxBase / st.cores).toFixed(2) : '0') + '</td>'; } },
+            { label: 'Total power (W)', render: function(st) { return '<td>' + st.totalPower.toLocaleString() + '</td>'; } },
+            { label: 'CPU cost ($K)', cost: true, render: function(st, i) {
+                return '<td><input type="number" class="tco-cpu-cost" data-idx="' + i + '" value="' + st.cpuCost + '" step="0.1" min="0" style="width:70px; padding:3px 6px; border:1px solid #ccc; border-radius:4px; font-size:0.82rem; text-align:right;"></td>';
+            }},
+            { label: 'System cost ($K)', cost: true, render: function(st) { return '<td>' + st.systemCost.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:1}) + '</td>'; } },
+            { label: 'License cost 5-years ($K)', cost: true, render: function(st) { return '<td>' + st.licenseCost.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:1}) + '</td>'; } },
+            { label: 'Total cost ($K)', cost: true, total: true, render: function(st) { return '<td style="font-weight:700;">' + st.totalCost.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:1}) + '</td>'; } }
+        ];
+
+        var html = '';
+        rows.forEach(function(row) {
+            var cls = row.cost ? ' class="tco-cost-row"' : '';
+            var thStyle = 'text-align:left; white-space:nowrap;';
+            if (row.total) thStyle += ' font-weight:700;';
+            html += '<tr' + cls + '><th style="' + thStyle + '">' + row.label + '</th>';
+            skuState.forEach(function(st, i) {
+                html += row.render(st, i);
+            });
+            html += '</tr>';
+        });
+        tcoTable.innerHTML = html;
+
+        tcoTable.querySelectorAll('.tco-dimm').forEach(function(sel) {
+            sel.addEventListener('change', function() {
+                skuState[parseInt(this.dataset.idx)].dimm = parseInt(this.value);
+                recalcAll();
+            });
+        });
+        tcoTable.querySelectorAll('.tco-dpc').forEach(function(sel) {
+            sel.addEventListener('change', function() {
+                skuState[parseInt(this.dataset.idx)].dpc = parseInt(this.value);
+                recalcAll();
+            });
+        });
+        tcoTable.querySelectorAll('.tco-cpu-cost').forEach(function(inp) {
+            inp.addEventListener('input', function() {
+                skuState[parseInt(this.dataset.idx)].cpuCost = parseFloat(this.value) || 0;
+                recalcAll();
+            });
+        });
+    }
+
+    goBtn.addEventListener('click', function() {
+        modal.classList.remove('active');
+
+        tcoMemPerVm = parseFloat(document.getElementById('tco-mem-per-vm').value) || 8;
+        tcoVcpuPerVm = parseFloat(document.getElementById('tco-vcpu-per-vm').value) || 2;
+        tcoTotalVm = parseInt(document.getElementById('tco-total-vm').value) || 5000;
+        var memPerVm = tcoMemPerVm;
+        var vcpuPerVm = tcoVcpuPerVm;
+        var totalVm = tcoTotalVm;
+        tcoCost32 = parseFloat(document.getElementById('tco-cost-32').value) || 2.3;
+        tcoCost64 = parseFloat(document.getElementById('tco-cost-64').value) || 5.6;
+        tcoLicCore = parseFloat(document.getElementById('tco-lic-core').value) || 0;
+        tcoNodePower = parseFloat(document.getElementById('tco-node-power').value) || 500;
+        var cost32 = tcoCost32;
+        var cost64 = tcoCost64;
+        var licCore = document.getElementById('tco-lic-core').value;
+        var licNode = document.getElementById('tco-lic-node').value;
+        var paramsDiv = document.getElementById('tco-params');
+        paramsDiv.innerHTML =
+            '<span><b>Memory/VM:</b> ' + memPerVm + ' GiB</span>' +
+            '<span><b>vCPU/VM:</b> ' + vcpuPerVm + '</span>' +
+            '<span><b>Total VMs:</b> ' + Number(totalVm).toLocaleString() + '</span>' +
+            '<span><b>32 GiB DIMM:</b> $' + cost32 + 'K</span>' +
+            '<span><b>64 GiB DIMM:</b> $' + cost64 + 'K</span>' +
+            '<span><b>License/core:</b> $' + Number(licCore).toLocaleString() + '</span>' +
+            '<span><b>License/node:</b> $' + Number(licNode).toLocaleString() + '</span>' +
+            '<span><b>Node power excl. CPU:</b> ' + tcoNodePower + 'W</span>';
+
+        var hidden = window._hiddenSkus || {};
+        skuState = summaryData.filter(function(s) {
+            return s.count > 0 && !hidden[s.sku_model + '_' + s.chips];
+        }).map(function(s) {
+            var isAmd = amdGens.indexOf(s.generation) >= 0;
+            return {
+                sku: s.sku_model,
+                socket: s.chips,
+                cores: s.cores,
+                tdp: s.tdp,
+                maxBase: s.max_base,
+                channel: s.channel,
+                dimm: 32,
+                dpc: 2,
+                cpuCost: 2.5,
+                nodeMem: 0,
+                colorClass: isAmd ? 'tco-amd' : 'tco-intel'
+            };
+        });
+        recalcAll();
+        tcoResults.style.display = 'block';
+    });
+})();
+</script>
+{% endif %}
+<h3 style="margin-top: 20px; margin-bottom: 10px; font-size: 1rem; color: #16213e;">Detail Results</h3>
+<p class="result-count">{{ count }} results</p>
+<div style="max-height: 600px; overflow-y: auto;">
+<table id="results-table">
+    <thead>
+        <tr>
+            <th class="sortable" data-col="0" data-type="str">Generation</th>
+            <th class="sortable" data-col="1" data-type="str">SKU Model</th>
+            <th class="sortable" data-col="2" data-type="str">Processor</th>
+            <th class="sortable" data-col="3" data-type="num">TDP</th>
+            <th class="sortable" data-col="4" data-type="str">System</th>
+            <th class="sortable" data-col="5" data-type="str">Vendor</th>
+            <th class="sortable" data-col="6" data-type="num">Total Cores</th>
+            <th class="sortable" data-col="7" data-type="num">Sockets</th>
+            <th class="sortable" data-col="8" data-type="str">Type</th>
+            <th class="sortable" data-col="9" data-type="num">Peak</th>
+            <th class="sortable" data-col="10" data-type="num">Base</th>
+            <th class="sortable" data-col="11" data-type="num">Base/TDP</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in results %}
+        <tr>
+            <td>{{ r.generation }}</td>
+            <td>{{ r.sku_model }}</td>
+            <td>{{ r.processor }}</td>
+            <td style="text-align: right;">{{ r.tdp }}</td>
+            <td>{% if r.spec_url %}<a href="{{ r.spec_url }}" target="_blank">{{ r.system_name }}</a>{% else %}{{ r.system_name }}{% endif %}</td>
+            <td>{{ r.hardware_vendor }}</td>
+            <td>{{ r.cores }}</td>
+            <td>{{ r.chips }}</td>
+            <td>{{ r.benchmark_type }}</td>
+            <td style="text-align: right; font-weight: 600;">{{ r.result }}</td>
+            <td style="text-align: right;">{{ r.baseline }}</td>
+            <td style="text-align: right;">{% if r.tdp > 0 %}{{ "%.2f"|format(r.baseline / r.tdp) }}{% else %}-{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+<script>
+(function() {
+    var table = document.getElementById('results-table');
+    if (!table) return;
+    var headers = table.querySelectorAll('th.sortable');
+    headers.forEach(function(th) {
+        th.addEventListener('click', function() {
+            var col = parseInt(this.dataset.col);
+            var type = this.dataset.type;
+            var tbody = table.querySelector('tbody');
+            var rows = Array.from(tbody.querySelectorAll('tr'));
+            var asc = this.dataset.dir !== 'asc';
+            headers.forEach(function(h) { h.dataset.dir = ''; h.classList.remove('sort-asc', 'sort-desc'); });
+            this.dataset.dir = asc ? 'asc' : 'desc';
+            this.classList.add(asc ? 'sort-asc' : 'sort-desc');
+            rows.sort(function(a, b) {
+                var va = a.children[col].textContent.trim();
+                var vb = b.children[col].textContent.trim();
+                if (type === 'num') {
+                    va = parseFloat(va) || 0;
+                    vb = parseFloat(vb) || 0;
+                    return asc ? va - vb : vb - va;
+                }
+                return asc ? va.localeCompare(vb) : vb.localeCompare(va);
+            });
+            rows.forEach(function(r) { tbody.appendChild(r); });
+        });
+    });
+})();
+</script>
+{% else %}
+<p>No results match the selected filters</p>
+{% endif %}
