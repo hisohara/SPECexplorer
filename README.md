@@ -10,6 +10,12 @@ A web application for exploring and analyzing SPEC CPU 2017 benchmark results. B
 - SKU Specifications browser with sortable tables
 - TCO Analysis with configurable parameters (memory, licensing, power)
 
+## Screenshots
+
+![Top page](docs/image-top.png)
+
+![Summary and chart](docs/image-summary.png)
+
 ## Prerequisites
 
 - Python 3.8+
