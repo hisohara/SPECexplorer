@@ -24,8 +24,7 @@ def startup():
 def index(request: Request):
     filter_opts = db.get_filter_options()
     result_count = db.get_result_count()
-    return templates.TemplateResponse("index.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "index.html", {
         "filter_opts": filter_opts,
         "result_count": result_count,
     })
@@ -43,8 +42,7 @@ async def upload(request: Request, fp_file: Optional[UploadFile] = File(None), i
 
     filter_opts = db.get_filter_options()
     result_count = db.get_result_count()
-    return templates.TemplateResponse("index.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "index.html", {
         "filter_opts": filter_opts,
         "result_count": result_count,
         "message": f"Imported {imported} SPEC results",
@@ -55,8 +53,7 @@ async def upload(request: Request, fp_file: Optional[UploadFile] = File(None), i
 def clear(request: Request):
     db.clear_results()
     filter_opts = db.get_filter_options()
-    return templates.TemplateResponse("index.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "index.html", {
         "filter_opts": filter_opts,
         "result_count": 0,
         "message": "All data cleared",
@@ -139,8 +136,7 @@ async def filter_results(request: Request):
                     })
         summary.sort(key=lambda s: (s["generation"], s["sku_model"], s["chips"]))
 
-    return templates.TemplateResponse("results.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "results.html", {
         "results": results,
         "count": len(results),
         "selected_skus": sku_models,
